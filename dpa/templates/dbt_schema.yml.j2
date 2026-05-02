@@ -1,0 +1,31 @@
+version: 2
+
+models:
+{% for table in config.tables %}
+  - name: {{ table.tier.value }}_{{ table.name }}
+    description: "{{ table.description or table.name }} ({{ table.tier.value }} tier)"
+    columns:
+{% for col in table.schema_ %}
+      - name: {{ col.name }}
+        description: "{{ col.description or col.name }}{% if col.pii %} [PII]{% endif %}"
+{% if col.pii %}
+        tags:
+          - pii
+{% endif %}
+{% endfor %}
+    tests:
+{% for rule in table.quality_rules %}
+{% if rule.rule_type.value in quality_to_dbt %}
+{% for col in rule.columns %}
+{% if rule.rule_type.value == "accepted_values" %}
+      - accepted_values:
+          column_name: {{ col }}
+          values: {{ rule.params.get("values", []) | tojson }}
+{% else %}
+      - {{ quality_to_dbt[rule.rule_type.value] }}:
+          column_name: {{ col }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% endfor %}

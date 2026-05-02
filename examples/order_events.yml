@@ -1,0 +1,89 @@
+name: order_events
+version: "1.0.0"
+description: "Order lifecycle events data product — from raw event stream to aggregated order facts."
+
+owner:
+  team: commerce-analytics
+  email: commerce-analytics@company.com
+
+sla:
+  freshness_hours: 4
+  availability_pct: 99.95
+
+tags:
+  - domain:commerce
+  - tier:critical
+
+tables:
+
+  - name: raw_order_events
+    tier: bronze
+    description: "Raw order events from Kafka ingestion — append-only."
+    schema:
+      - name: event_id
+        type: string
+        nullable: false
+      - name: order_id
+        type: string
+        nullable: false
+      - name: customer_id
+        type: string
+        nullable: false
+      - name: event_type
+        type: string
+        nullable: false
+      - name: event_payload
+        type: string
+      - name: event_at
+        type: timestamp
+        nullable: false
+      - name: kafka_offset
+        type: long
+    partition_by:
+      - column: event_at
+        transform: hour
+    quality_rules:
+      - not_null: [event_id, order_id, customer_id, event_type, event_at]
+
+  - name: orders
+    tier: gold
+    description: "Aggregated order facts — one row per order in its latest state."
+    schema:
+      - name: order_id
+        type: string
+        nullable: false
+      - name: customer_id
+        type: string
+        nullable: false
+      - name: status
+        type: string
+        nullable: false
+      - name: item_count
+        type: integer
+      - name: subtotal
+        type: decimal
+        decimal_precision: 18
+        decimal_scale: 2
+      - name: tax
+        type: decimal
+        decimal_precision: 18
+        decimal_scale: 2
+      - name: total
+        type: decimal
+        decimal_precision: 18
+        decimal_scale: 2
+      - name: created_at
+        type: timestamp
+        nullable: false
+      - name: updated_at
+        type: timestamp
+    partition_by:
+      - column: created_at
+        transform: month
+    quality_rules:
+      - not_null: [order_id, customer_id, status, created_at]
+      - unique: [order_id]
+      - accepted_values:
+          columns: [status]
+          params:
+            values: [pending, confirmed, shipped, delivered, cancelled, refunded]

@@ -1,0 +1,11 @@
+dpa_spark:
+  target: dev
+  outputs:
+    dev:
+      type: spark
+      method: thrift
+      host: localhost
+      port: 10000
+      schema: dpa_transforms
+      connect_retries: 5
+      connect_timeout: 60

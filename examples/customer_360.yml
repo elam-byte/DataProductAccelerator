@@ -1,0 +1,130 @@
+name: customer_360
+version: "1.0.0"
+description: "Unified customer profile data product — bronze raw ingest through gold aggregated view."
+
+owner:
+  team: data-platform
+  email: data-platform@company.com
+  slack_channel: "#data-platform"
+
+sla:
+  freshness_hours: 24
+  availability_pct: 99.9
+
+tags:
+  - domain:customer
+  - tier:core
+
+tables:
+
+  - name: raw_customers
+    tier: bronze
+    description: "Raw customer records as ingested from the CRM system."
+    schema:
+      - name: customer_id
+        type: string
+        nullable: false
+      - name: first_name
+        type: string
+      - name: last_name
+        type: string
+      - name: email
+        type: string
+        pii: true
+      - name: phone
+        type: string
+        pii: true
+      - name: created_at
+        type: timestamp
+        nullable: false
+      - name: source_system
+        type: string
+    partition_by:
+      - column: created_at
+        transform: day
+    quality_rules:
+      - not_null: [customer_id, created_at]
+      - unique: [customer_id]
+
+  - name: customers
+    tier: silver
+    description: "Cleaned and standardised customer records."
+    schema:
+      - name: customer_id
+        type: string
+        nullable: false
+      - name: first_name
+        type: string
+        nullable: false
+      - name: last_name
+        type: string
+        nullable: false
+      - name: email
+        type: string
+        pii: true
+      - name: phone
+        type: string
+        pii: true
+      - name: country_code
+        type: string
+      - name: created_at
+        type: timestamp
+        nullable: false
+      - name: updated_at
+        type: timestamp
+    partition_by:
+      - column: country_code
+        transform: identity
+    quality_rules:
+      - not_null: [customer_id, first_name, last_name, created_at]
+      - unique: [customer_id]
+      - email_format: [email]
+      - accepted_values:
+          columns: [country_code]
+          params:
+            values: [US, GB, DE, FR, IN, JP, AU, CA]
+
+  - name: customer_summary
+    tier: gold
+    description: "Aggregated customer KPIs — one row per customer_id."
+    schema:
+      - name: customer_id
+        type: string
+        nullable: false
+      - name: full_name
+        type: string
+        nullable: false
+      - name: email
+        type: string
+        pii: true
+      - name: total_orders
+        type: long
+      - name: total_spend
+        type: decimal
+        decimal_precision: 18
+        decimal_scale: 2
+      - name: first_order_at
+        type: timestamp
+      - name: last_order_at
+        type: timestamp
+      - name: customer_segment
+        type: string
+      - name: country_code
+        type: string
+      - name: as_of_date
+        type: date
+        nullable: false
+    partition_by:
+      - column: as_of_date
+        transform: month
+    quality_rules:
+      - not_null: [customer_id, full_name, as_of_date]
+      - unique: [customer_id]
+      - min_value:
+          columns: [total_orders]
+          params:
+            min: 0
+      - accepted_values:
+          columns: [customer_segment]
+          params:
+            values: [high_value, mid_value, low_value, new, churned]

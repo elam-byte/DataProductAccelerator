@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+.eggs/
+
+# uv
+uv.lock
+
+# Environment (never commit secrets)
+.env
+
+# DPA local catalog
+.dpa/
+
+# dbt
+dbt_project/target/
+dbt_project/dbt_packages/
+dbt_project/logs/
+
+# Great Expectations
+ge_project/validations/
+ge_project/data_docs/
+ge_project/uncommitted/
+
+# Spark
+derby.log
+metastore_db/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# macOS
+.DS_Store
+
+# Test outputs
+.pytest_cache/
+htmlcov/
+.coverage

@@ -1,0 +1,12 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir \
+    dagster==1.7.6 \
+    dagster-webserver==1.7.6 \
+    dagster-postgres==0.23.6
+
+ENV DAGSTER_HOME=/dagster
+
+CMD ["dagster-webserver", "-h", "0.0.0.0", "-p", "3000", "-w", "/dagster/workspace.yaml"]

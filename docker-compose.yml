@@ -1,0 +1,213 @@
+version: "3.9"
+
+# Full OSS Data Lakehouse stack.
+# Run: make up (starts minimal profile) or docker compose --profile full up -d
+#
+# Profiles:
+#   (default)  minio + iceberg-rest + dagster — for fast dpa deploy demos
+#   full        adds OpenMetadata + Spark
+
+x-dagster-common: &dagster-common
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.dagster
+  env_file: .env
+  volumes:
+    - ./dagster_pipelines:/dagster
+    - ./.dpa:/dpa-catalog
+  depends_on:
+    dagster-postgres:
+      condition: service_healthy
+
+services:
+
+  # ── Object Storage ────────────────────────────────────────────────────────
+  minio:
+    image: quay.io/minio/minio:RELEASE.2024-01-16T16-07-38Z
+    container_name: minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  minio-init:
+    image: quay.io/minio/mc:RELEASE.2024-01-16T16-06-34Z
+    container_name: minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/iceberg-warehouse &&
+        echo 'MinIO initialised'
+      "
+
+  # ── Iceberg REST Catalog ──────────────────────────────────────────────────
+  iceberg-rest:
+    image: tabulario/iceberg-rest:0.10.0
+    container_name: iceberg-rest
+    ports:
+      - "8181:8181"
+    environment:
+      CATALOG_WAREHOUSE: s3://iceberg-warehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_ACCESS__KEY__ID: minioadmin
+      CATALOG_S3_SECRET__ACCESS__KEY: minioadmin
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+      AWS_REGION: us-east-1
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8181/v1/config"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Dagster Orchestration ─────────────────────────────────────────────────
+  dagster-postgres:
+    image: postgres:15-alpine
+    container_name: dagster-postgres
+    environment:
+      POSTGRES_USER: dagster
+      POSTGRES_PASSWORD: dagster
+      POSTGRES_DB: dagster
+    volumes:
+      - dagster_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dagster"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  dagster-webserver:
+    <<: *dagster-common
+    container_name: dagster-webserver
+    command: dagster-webserver -h 0.0.0.0 -p 3000 -w /dagster/workspace.yaml
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+  dagster-daemon:
+    <<: *dagster-common
+    container_name: dagster-daemon
+    command: dagster-daemon run -w /dagster/workspace.yaml
+    restart: unless-stopped
+
+  # ── Apache Spark (architecture reference — not called by dpa deploy) ──────
+  spark-master:
+    image: bitnami/spark:3.5.1
+    container_name: spark-master
+    profiles: ["full"]
+    environment:
+      SPARK_MODE: master
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    restart: unless-stopped
+
+  spark-worker:
+    image: bitnami/spark:3.5.1
+    container_name: spark-worker
+    profiles: ["full"]
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_MEMORY: 2G
+      SPARK_WORKER_CORES: "2"
+    depends_on:
+      - spark-master
+    restart: unless-stopped
+
+  # ── OpenMetadata Governance ───────────────────────────────────────────────
+  openmetadata-mysql:
+    image: mysql:8.0
+    container_name: openmetadata-mysql
+    profiles: ["full"]
+    environment:
+      MYSQL_ROOT_PASSWORD: openmetadata_password
+      MYSQL_DATABASE: openmetadata_db
+      MYSQL_USER: openmetadata_user
+      MYSQL_PASSWORD: openmetadata_password
+    volumes:
+      - om_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-popenmetadata_password"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.10.2
+    container_name: elasticsearch
+    profiles: ["full"]
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+
+  openmetadata-server:
+    image: openmetadata/server:1.3.1
+    container_name: openmetadata-server
+    profiles: ["full"]
+    ports:
+      - "8585:8585"
+      - "8586:8586"
+    environment:
+      DB_DRIVER_CLASS: com.mysql.cj.jdbc.Driver
+      DB_SCHEME: mysql
+      DB_USE_SSL: "false"
+      DB_USER: openmetadata_user
+      DB_USER_PASSWORD: openmetadata_password
+      DB_HOST: openmetadata-mysql
+      DB_PORT: "3306"
+      OM_DATABASE: openmetadata_db
+      ELASTICSEARCH_HOST: elasticsearch
+      ELASTICSEARCH_PORT: "9200"
+      ELASTICSEARCH_SCHEME: http
+      SERVER_HOST_API_URL: http://localhost:8585
+      AIRFLOW_HOST: ""
+    depends_on:
+      openmetadata-mysql:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8585/api/v1/system/status"]
+      interval: 30s
+      timeout: 15s
+      retries: 15
+      start_period: 120s
+    restart: unless-stopped
+
+volumes:
+  minio_data:
+  dagster_pg_data:
+  om_mysql_data:
+  es_data:

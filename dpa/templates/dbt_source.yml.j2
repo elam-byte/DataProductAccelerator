@@ -1,0 +1,23 @@
+version: 2
+
+sources:
+  - name: {{ config.name }}
+    description: "Raw source tables for the {{ config.name }} data product (Iceberg / MinIO)"
+    database: "{{ config.namespace }}"
+    schema: bronze
+    tables:
+{% for table in config.tables if table.tier.value == "bronze" %}
+      - name: {{ table.name }}
+        description: "{{ table.description or table.name }}"
+        columns:
+{% for col in table.schema_ %}
+          - name: {{ col.name }}
+            description: "{{ col.description or col.name }}"
+{% if col.pii %}
+            tags:
+              - pii
+{% endif %}
+{% endfor %}
+{% else %}
+      []
+{% endfor %}
