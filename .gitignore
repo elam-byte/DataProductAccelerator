@@ -42,3 +42,6 @@ metastore_db/
 .pytest_cache/
 htmlcov/
 .coverage
+
+# claude
+claude.md
